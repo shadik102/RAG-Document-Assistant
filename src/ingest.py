@@ -1,36 +1,40 @@
-﻿from pathlib import Path
-import chromadb
-from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunction
+﻿
+from pathlib import Path
+
 from pypdf import PdfReader
 
-from chunking import chunk_text
+from src.chunking import chunk_text
+from src.retrieval import client, embedding_function
+
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 DOCUMENTS_DIR = BASE_DIR / "documents"
-CHROMA_DIR = BASE_DIR / "chroma_db"
-
-embedding_function = SentenceTransformerEmbeddingFunction(
-    model_name="all-MiniLM-L6-v2"
-)
-
-client = chromadb.PersistentClient(path=str(CHROMA_DIR))
-
-collection = client.get_or_create_collection(
-    name="rag_documents",
-    embedding_function=embedding_function
-)
 
 
 def ingest_documents():
-    pdf_files = list(DOCUMENTS_DIR.glob("*.pdf"))
+
+    pdf_files = sorted(DOCUMENTS_DIR.glob("*.pdf"))
 
     if not pdf_files:
-        print("No PDF files found in the documents folder.")
-        return
+        raise FileNotFoundError(
+            "No PDF files found in the documents folder."
+        )
+
+    try:
+        client.delete_collection(name="rag_documents")
+        print("Old vector database collection deleted.")
+    except Exception:
+        print("Creating a new vector database collection.")
+
+    collection = client.create_collection(
+        name="rag_documents",
+        embedding_function=embedding_function
+    )
 
     total_chunks = 0
 
     for pdf_file in pdf_files:
+
         print(f"\nProcessing: {pdf_file.name}")
 
         reader = PdfReader(str(pdf_file))
@@ -39,11 +43,19 @@ def ingest_documents():
         documents = []
         metadatas = []
 
-        for page_number, page in enumerate(reader.pages, start=1):
+        for page_number, page in enumerate(
+            reader.pages,
+            start=1
+        ):
+
             text = page.extract_text() or ""
             chunks = chunk_text(text)
 
-            for chunk_number, chunk in enumerate(chunks, start=1):
+            for chunk_number, chunk in enumerate(
+                chunks,
+                start=1
+            ):
+
                 chunk_id = (
                     f"{pdf_file.stem}_page{page_number}_chunk{chunk_number}"
                 )
@@ -65,10 +77,14 @@ def ingest_documents():
             )
 
         total_chunks += len(ids)
-        print(f"Stored {len(ids)} chunks from {pdf_file.name}")
 
-    print(f"\nIngestion completed! Total chunks: {total_chunks}")
+        print(f"Stored {len(ids)} chunks.")
+
+    print("\nIngestion completed!")
+    print(f"Total chunks processed: {total_chunks}")
     print(f"Total chunks in database: {collection.count()}")
+
+    return collection.count()
 
 
 if __name__ == "__main__":

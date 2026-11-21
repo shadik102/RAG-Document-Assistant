@@ -8,5 +8,3 @@ __pycache__/
 # Local development tools
 .agents/
 .claude/
-
-documents/*.pdf
