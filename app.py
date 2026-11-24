@@ -1,9 +1,11 @@
-﻿
-import os
+﻿import os
+import hashlib
+from io import BytesIO
 from pathlib import Path
 
 import streamlit as st
 from dotenv import load_dotenv
+from pypdf import PdfReader
 
 # --------------------------------------------------
 # CONFIGURATION
@@ -36,10 +38,12 @@ if not API_KEY:
 # Make the key available before importing generation.py.
 os.environ["GEMINI_API_KEY"] = API_KEY
 
+
 # --------------------------------------------------
 # IMPORT PROJECT MODULES
 # --------------------------------------------------
 
+from src.chunking import chunk_text
 from src.retrieval import get_collection, retrieve_documents
 from src.ingest import ingest_documents
 
@@ -105,6 +109,90 @@ st.success(
 
 
 # --------------------------------------------------
+# USER PDF UPLOAD
+# --------------------------------------------------
+
+st.subheader("📄 Add Your Own PDF")
+
+st.write(
+    "Upload one or more PDF files to add them to the knowledge base. "
+    "Then ask questions about their contents."
+)
+
+uploaded_files = st.file_uploader(
+    "Choose PDF file(s)",
+    type=["pdf"],
+    accept_multiple_files=True
+)
+
+if st.button(
+    "Add PDFs to Knowledge Base",
+    disabled=not uploaded_files
+):
+
+    try:
+        with st.spinner("Reading and indexing your PDF files..."):
+
+            collection = get_collection()
+            total_added = 0
+
+            for uploaded_file in uploaded_files:
+
+                file_bytes = uploaded_file.getvalue()
+                file_hash = hashlib.sha256(file_bytes).hexdigest()[:16]
+
+                reader = PdfReader(BytesIO(file_bytes))
+
+                ids = []
+                documents = []
+                metadatas = []
+
+                for page_number, page in enumerate(reader.pages, start=1):
+
+                    page_text = page.extract_text() or ""
+                    chunks = chunk_text(page_text)
+
+                    for chunk_number, chunk in enumerate(chunks, start=1):
+
+                        chunk_id = (
+                            f"upload_{file_hash}_"
+                            f"page{page_number}_chunk{chunk_number}"
+                        )
+
+                        ids.append(chunk_id)
+                        documents.append(chunk)
+
+                        metadatas.append({
+                            "source": uploaded_file.name,
+                            "page": page_number,
+                            "chunk": chunk_number
+                        })
+
+                if ids:
+                    collection.upsert(
+                        ids=ids,
+                        documents=documents,
+                        metadatas=metadatas
+                    )
+
+                    total_added += len(ids)
+
+        if total_added:
+            st.success(
+                f"Added {total_added} chunks from your uploaded PDF file(s)."
+            )
+            st.rerun()
+        else:
+            st.warning(
+                "No readable text was found in the uploaded PDF file(s)."
+            )
+
+    except Exception as error:
+        st.error("Could not process the uploaded PDF file(s).")
+        st.exception(error)
+
+
+# --------------------------------------------------
 # SESSION STATE
 # --------------------------------------------------
 
@@ -126,16 +214,17 @@ with st.sidebar:
     st.write("**Embedding:** all-MiniLM-L6-v2")
     st.write("**Vector Database:** ChromaDB")
     st.write("**LLM:** Google Gemini")
-    st.write("**Knowledge Base:** 4 PDF documents")
-    st.write(f"**Indexed Chunks:** {total_chunks}")
+    st.write("**Knowledge Base:** PDF documents")
+    st.write(f"**Indexed Chunks:** {get_collection().count()}")
 
     st.divider()
 
     st.markdown("### How it works")
-    st.write("1. Ask a question.")
-    st.write("2. Search relevant PDF chunks.")
-    st.write("3. Send retrieved context to Gemini.")
-    st.write("4. Receive an answer with sources.")
+    st.write("1. Upload PDF documents or use the existing knowledge base.")
+    st.write("2. Ask a question.")
+    st.write("3. Retrieve relevant PDF chunks.")
+    st.write("4. Send the retrieved context to Gemini.")
+    st.write("5. Receive an answer with source references.")
 
     st.divider()
 
